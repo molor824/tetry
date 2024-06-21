@@ -8,6 +8,9 @@ use bevy::{core::*, prelude::*, render::camera::*, window::*};
 const SPRITES_PATH: &str = "./sprites.png";
 const VISIBLE_FRAME: u32 = 5;
 const FALL_TIME: f32 = 0.5;
+const FAST_FALL_TIME: f32 = 1.0 / 15.0;
+const SLIDE_START_TIME: f32 = 0.2;
+const SLIDE_TIME: f32 = 1.0 / 15.0;
 
 fn game_state_setup(mut commands: Commands) {
     commands.insert_resource(GameState::Play);
@@ -38,12 +41,16 @@ fn make_visible(frame: Res<FrameCount>, mut window_q: Query<&mut Window>) {
 
 #[derive(Resource)]
 pub struct SpriteHandle(pub Handle<Image>);
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct TetrisManager {
     pub order: [usize; 7],
     pub next_order: [usize; 7],
     pub order_index: usize,
     pub fall_timer: Timer,
+    pub fast_fall_timer: Timer,
+    pub slide_start_timer: Timer,
+    pub slide_timer: Timer,
+    pub slide_dir: f32,
 }
 impl TetrisManager {
     fn new() -> Self {
@@ -63,6 +70,10 @@ impl TetrisManager {
             next_order,
             order_index: 0,
             fall_timer: Timer::from_seconds(FALL_TIME, TimerMode::Repeating),
+            fast_fall_timer: Timer::from_seconds(FAST_FALL_TIME, TimerMode::Repeating),
+            slide_start_timer: Timer::from_seconds(SLIDE_START_TIME, TimerMode::Once),
+            slide_timer: Timer::from_seconds(SLIDE_TIME, TimerMode::Repeating),
+            slide_dir: 0.0,
         }
     }
     pub fn current_tetris(&self) -> usize {
@@ -101,6 +112,8 @@ fn is_state_game_over(game_state: Res<GameState>) -> bool {
 }
 
 fn main() {
+    println!("Current direction {:?}", std::env::current_dir().unwrap());
+
     App::new()
         .add_plugins(
             DefaultPlugins
@@ -131,7 +144,12 @@ fn main() {
             Update,
             (
                 make_visible,
-                tetris::tetris_fall.run_if(is_state_play),
+                (
+                    tetris::fall.run_if(is_state_play),
+                    tetris::slide.run_if(is_state_play),
+                    tetris::rotate.run_if(is_state_play),
+                )
+                    .before(tetris::advance),
                 tetris::advance.run_if(is_state_block_clear),
             ),
         )
