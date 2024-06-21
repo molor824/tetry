@@ -144,13 +144,14 @@ fn main() {
             Update,
             (
                 make_visible,
+                tetris::place.run_if(is_state_block_clear).before(tetris::advance),
+                tetris::advance.run_if(is_state_block_clear),
                 (
                     tetris::fall.run_if(is_state_play),
                     tetris::slide.run_if(is_state_play),
                     tetris::rotate.run_if(is_state_play),
                 )
-                    .before(tetris::advance),
-                tetris::advance.run_if(is_state_block_clear),
+                    .after(tetris::advance),
             ),
         )
         .run();
