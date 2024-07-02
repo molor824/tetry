@@ -3,14 +3,14 @@ mod tetris;
 
 use std::mem;
 
-use bevy::{core::*, prelude::*, render::camera::*, window::*};
+use bevy::{core::*, prelude::*, render::camera::*, transform::TransformSystem, window::*};
 
-const SPRITES_PATH: &str = "./sprites.png";
+const SPRITES_PATH: &str = "sprites.png";
 const VISIBLE_FRAME: u32 = 5;
 const FALL_TIME: f32 = 0.5;
 const FAST_FALL_TIME: f32 = 1.0 / 15.0;
 const SLIDE_START_TIME: f32 = 0.2;
-const SLIDE_TIME: f32 = 1.0 / 15.0;
+const SLIDE_TIME: f32 = 1.0 / 20.0;
 
 fn game_state_setup(mut commands: Commands) {
     commands.insert_resource(GameState::Play);
@@ -51,13 +51,13 @@ pub struct TetrisManager {
     pub slide_start_timer: Timer,
     pub slide_timer: Timer,
     pub slide_dir: f32,
+    pub hit_floor: bool,
 }
 impl TetrisManager {
     fn new() -> Self {
         let mut order = [0; 7];
         let mut next_order = [0; 7];
 
-        // initialized here
         for i in 0..7 {
             order[i] = i;
             next_order[i] = i;
@@ -74,6 +74,7 @@ impl TetrisManager {
             slide_start_timer: Timer::from_seconds(SLIDE_START_TIME, TimerMode::Once),
             slide_timer: Timer::from_seconds(SLIDE_TIME, TimerMode::Repeating),
             slide_dir: 0.0,
+            hit_floor: false,
         }
     }
     pub fn current_tetris(&self) -> usize {
@@ -112,8 +113,6 @@ fn is_state_game_over(game_state: Res<GameState>) -> bool {
 }
 
 fn main() {
-    println!("Current direction {:?}", std::env::current_dir().unwrap());
-
     App::new()
         .add_plugins(
             DefaultPlugins
@@ -134,25 +133,33 @@ fn main() {
         .add_systems(
             Startup,
             (
-                asset_setup,
-                camera_setup,
-                (field::setup.after(asset_setup), game_state_setup).before(tetris::setup),
+                (asset_setup, camera_setup, game_state_setup),
+                field::setup,
                 tetris::setup,
-            ),
+            )
+                .chain(),
         )
         .add_systems(
             Update,
             (
                 make_visible,
-                tetris::place.run_if(is_state_block_clear).before(tetris::advance),
+                tetris::rotate.run_if(is_state_play),
+                tetris::slide.run_if(is_state_play),
+                tetris::fall.run_if(is_state_play),
+            )
+                .chain(),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                tetris::place.run_if(is_state_block_clear),
+                tetris::clear_block.run_if(is_state_block_clear),
                 tetris::advance.run_if(is_state_block_clear),
-                (
-                    tetris::fall.run_if(is_state_play),
-                    tetris::slide.run_if(is_state_play),
-                    tetris::rotate.run_if(is_state_play),
-                )
-                    .after(tetris::advance),
-            ),
+                tetris::check_advanced_block.run_if(is_state_block_clear),
+                tetris::update_ghost,
+            )
+                .chain()
+                .after(TransformSystem::TransformPropagate),
         )
         .run();
 }

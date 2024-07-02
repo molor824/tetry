@@ -4,6 +4,7 @@ use bevy::input::*;
 use bevy::math::*;
 use bevy::prelude::*;
 use field::*;
+use std::collections::*;
 
 // block order:
 // I O T S Z J L
@@ -87,6 +88,9 @@ pub struct NextTetris;
 #[derive(Component)]
 pub struct ActiveTetris;
 
+#[derive(Component)]
+pub struct GhostTetris;
+
 fn get_spawn_position(tetris_index: usize) -> Vec2 {
     (if matches!(tetris_index, tetris::I | tetris::O) {
         vec2(0.0, -1.0)
@@ -114,11 +118,14 @@ fn replace(
 }
 
 fn spawn_tetris(
-    mut commands: Commands,
+    commands: &mut Commands,
     tetris_index: usize,
-    sprite_handle: Res<SpriteHandle>,
+    sprite_handle: &Res<SpriteHandle>,
+    tint: Color,
 ) -> Entity {
-    let root = commands.spawn(TransformBundle::default()).id();
+    let root = commands
+        .spawn((TransformBundle::default(), InheritedVisibility::VISIBLE))
+        .id();
 
     let min = BLOCK_RECT_START[tetris_index];
     let max = min + BLOCK_SIZE;
@@ -127,6 +134,7 @@ fn spawn_tetris(
         commands
             .spawn(SpriteBundle {
                 sprite: Sprite {
+                    color: tint,
                     rect: Some(Rect::from_corners(min, max)),
                     ..Default::default()
                 },
@@ -152,7 +160,8 @@ pub fn setup(
     let field = field_q.single();
 
     let index = manager.current_tetris();
-    let tetris = spawn_tetris(commands.reborrow(), index, Res::clone(&sprite_handle));
+
+    let tetris = spawn_tetris(&mut commands, index, &sprite_handle, Color::WHITE);
     commands
         .entity(tetris)
         .insert((
@@ -161,9 +170,25 @@ pub fn setup(
         ))
         .set_parent(field);
 
+    let ghost_tetris = spawn_tetris(
+        &mut commands,
+        index,
+        &sprite_handle,
+        Color::rgba(1.0, 1.0, 1.0, 0.25),
+    );
+    commands
+        .entity(ghost_tetris)
+        .insert(GhostTetris {})
+        .set_parent(field);
+
     let next_field = next_field_q.single();
 
-    let next_tetris = spawn_tetris(commands.reborrow(), manager.next_tetris(), sprite_handle);
+    let next_tetris = spawn_tetris(
+        &mut commands,
+        manager.next_tetris(),
+        &sprite_handle,
+        Color::WHITE,
+    );
     commands
         .entity(next_tetris)
         .insert(NextTetris {})
@@ -174,7 +199,7 @@ pub fn setup(
 pub fn is_colliding(
     point: Vec2,
     field_pos: Vec2,
-    block_q: &Query<&Transform, (With<Block>, Without<ActiveTetris>)>,
+    block_q: &Query<&Transform, impl QueryFilter>,
 ) -> bool {
     let relative_point = point - field_pos;
 
@@ -198,19 +223,20 @@ pub fn is_colliding(
 }
 
 pub fn is_tetris_colliding(
-    transform: GlobalTransform,
-    field_q: &Query<&Transform, (With<Field>, Without<ActiveTetris>)>,
-    block_q: &Query<&Transform, (With<Block>, Without<ActiveTetris>)>,
-    children_q: &Query<&Children, With<ActiveTetris>>,
-    transform_q: &Query<&Transform, Without<ActiveTetris>>,
+    tetris_transform: &GlobalTransform,
+    field_transform: &GlobalTransform,
+    tetris_children: &Children,
+    block_q: &Query<&Transform, impl QueryFilter>,
+    transform_q: &Query<&Transform, impl QueryFilter>,
 ) -> bool {
-    let children = children_q.single();
-    let field_pos = field_q.single().translation.truncate();
+    let field_pos = field_transform.translation().truncate();
 
-    for &child in children {
+    for &child in tetris_children {
         let child_transform = transform_q.get(child).unwrap();
-        let point = transform.transform_point(child_transform.translation).truncate();
-        if is_colliding(point, field_pos, &block_q) {
+        let point = tetris_transform
+            .transform_point(child_transform.translation)
+            .truncate();
+        if is_colliding(point, field_pos, block_q) {
             return true;
         }
     }
@@ -221,11 +247,11 @@ pub fn is_tetris_colliding(
 pub fn place(
     mut commands: Commands,
     active_tetris_q: Query<&Children, With<ActiveTetris>>,
-    block_q: Query<(&Sprite, &GlobalTransform, &Handle<Image>)>,
+    block_q: Query<(&Sprite, &Handle<Image>, &GlobalTransform)>,
 ) {
     let children = active_tetris_q.single();
     for child in children {
-        let (sprite, global_transform, texture) = block_q.get(*child).unwrap();
+        let (sprite, texture, global_transform) = block_q.get(*child).unwrap();
         commands.spawn((
             SpriteBundle {
                 sprite: sprite.clone(),
@@ -240,10 +266,10 @@ pub fn place(
 
 pub fn advance(
     mut manager: ResMut<TetrisManager>,
-    mut game_state: ResMut<GameState>,
-    mut active_tetris_q: Query<(&Children, &mut Transform), (With<ActiveTetris>, Without<Field>)>,
+    mut active_tetris_q: Query<(&Children, &mut Transform), With<ActiveTetris>>,
+    mut block_q: Query<(&mut Transform, &mut Sprite), Without<ActiveTetris>>,
+    ghost_tetris_q: Query<&Children, With<GhostTetris>>,
     next_tetris_q: Query<&Children, With<NextTetris>>,
-    mut block_q: Query<(&mut Transform, &mut Sprite), (Without<ActiveTetris>, Without<Field>)>,
 ) {
     manager.advance();
 
@@ -252,15 +278,38 @@ pub fn advance(
     transform.translation = get_spawn_position(manager.current_tetris()).extend(0.0);
     transform.rotation = Quat::default();
 
+    let ghost_tetris_children = ghost_tetris_q.single();
+    replace(
+        manager.current_tetris(),
+        ghost_tetris_children,
+        &mut block_q,
+    );
+
     let next_tetris_children = next_tetris_q.single();
     replace(manager.next_tetris(), next_tetris_children, &mut block_q);
+}
 
-    manager.fall_timer.reset();
-    manager.fast_fall_timer.reset();
-    manager.slide_timer.reset();
-    manager.slide_start_timer.reset();
-    manager.slide_dir = 0.0;
-    *game_state = GameState::Play;
+pub fn check_advanced_block(
+    mut manager: ResMut<TetrisManager>,
+    mut game_state: ResMut<GameState>,
+    active_tetris_q: Query<(&Transform, &Children), With<ActiveTetris>>, // should be fine since there is no modification to the active tetris transform after transform propegation
+    block_q: Query<&Transform, With<Block>>,
+    field_q: Query<&GlobalTransform, With<Field>>,
+    transform_q: Query<&Transform>,
+) {
+    let (tetris_transform, children) = active_tetris_q.single();
+    let field_transform = field_q.single();
+    if is_tetris_colliding(&(*field_transform * *tetris_transform), field_transform, children, &block_q, &transform_q) {
+        info!("Game over!");
+        *game_state = GameState::GameOver;
+    } else {
+        manager.fall_timer.reset();
+        manager.fast_fall_timer.reset();
+        manager.slide_timer.reset();
+        manager.slide_start_timer.reset();
+        manager.slide_dir = 0.0;
+        *game_state = GameState::Play;    
+    }
 }
 
 pub fn fall(
@@ -268,30 +317,26 @@ pub fn fall(
     button_input: Res<ButtonInput<KeyCode>>,
     mut manager: ResMut<TetrisManager>,
     mut game_state: ResMut<GameState>,
-    mut tetris_q: Query<(&mut Transform, &GlobalTransform), With<ActiveTetris>>,
+    mut tetris_q: Query<&mut Transform, With<ActiveTetris>>,
     children_q: Query<&Children, With<ActiveTetris>>,
-    field_q: Query<&Transform, (With<Field>, Without<ActiveTetris>)>,
+    field_q: Query<&GlobalTransform, With<Field>>,
     block_q: Query<&Transform, (With<Block>, Without<ActiveTetris>)>,
     transform_q: Query<&Transform, Without<ActiveTetris>>,
 ) {
-    let delta = time.delta();
-    let fast_fall = button_input.pressed(KeyCode::ArrowDown);
+    let field_transform = field_q.single();
+    let tetris_children = children_q.single();
 
-    if fast_fall {
-        manager.fast_fall_timer.tick(delta);
-    } else {
-        manager.fall_timer.tick(delta);
-    }
-
-    let (mut transform, global_transform) = tetris_q.single_mut();
     let mut fall_transform = Transform::from_translation(vec3(0.0, -BLOCK_SIZE.y, 0.0));
+
+    let mut transform = tetris_q.single_mut();
+    let global_transform = *field_q.single() * *transform;
 
     if button_input.just_pressed(KeyCode::Space) {
         while !is_tetris_colliding(
-            fall_transform * *global_transform,
-            &field_q,
+            &(fall_transform * global_transform),
+            field_transform,
+            tetris_children,
             &block_q,
-            &children_q,
             &transform_q,
         ) {
             fall_transform.translation.y -= BLOCK_SIZE.y;
@@ -302,29 +347,41 @@ pub fn fall(
         return;
     }
 
+    let delta = time.delta();
+    let fast_fall = button_input.pressed(KeyCode::ArrowDown);
+
+    manager.fall_timer.tick(delta);
+    manager.fast_fall_timer.tick(delta);
+
+    if is_tetris_colliding(
+        &(fall_transform * global_transform),
+        field_transform,
+        tetris_children,
+        &block_q,
+        &transform_q,
+    ) {
+        if !manager.hit_floor {
+            manager.hit_floor = true;
+            manager.fall_timer.reset(); // this allows player to slide and place a block
+        }
+        if manager.fall_timer.finished() {
+            *game_state = GameState::BlockClear;
+        }
+        return;
+    }
+    manager.hit_floor = false;
     if fast_fall && manager.fast_fall_timer.finished()
         || !fast_fall && manager.fall_timer.finished()
     {
-        if is_tetris_colliding(
-            fall_transform * *global_transform,
-            &field_q,
-            &block_q,
-            &children_q,
-            &transform_q,
-        ) {
-            *game_state = GameState::BlockClear;
-            return;
-        }
         transform.translation.y -= BLOCK_SIZE.y;
     }
 }
-
 pub fn slide(
     time: Res<Time>,
     button_input: Res<ButtonInput<KeyCode>>,
     mut manager: ResMut<TetrisManager>,
-    mut active_tetris_q: Query<(&mut Transform, &GlobalTransform), With<ActiveTetris>>,
-    field_q: Query<&Transform, (With<Field>, Without<ActiveTetris>)>,
+    mut tetris_q: Query<&mut Transform, With<ActiveTetris>>,
+    field_q: Query<&GlobalTransform, With<Field>>,
     block_q: Query<&Transform, (With<Block>, Without<ActiveTetris>)>,
     children_q: Query<&Children, With<ActiveTetris>>,
     transform_q: Query<&Transform, Without<ActiveTetris>>,
@@ -355,14 +412,18 @@ pub fn slide(
         return;
     }
 
-    let (mut transform, global_transform) = active_tetris_q.single_mut();
+    let mut transform = tetris_q.single_mut();
+    let global_transform = *field_q.single() * *transform;
     let direction_transform = Transform::from_translation(vec3(direction * BLOCK_SIZE.x, 0.0, 0.0));
 
+    let field_transform: &GlobalTransform = field_q.single();
+    let tetris_children = children_q.single();
+
     if is_tetris_colliding(
-        direction_transform * *global_transform,
-        &field_q,
+        &(direction_transform * global_transform),
+        field_transform,
+        tetris_children,
         &block_q,
-        &children_q,
         &transform_q,
     ) {
         return;
@@ -370,11 +431,39 @@ pub fn slide(
 
     transform.translation.x += direction * BLOCK_SIZE.x;
 }
+pub fn clear_block(
+    mut commands: Commands,
+    mut block_q: Query<(&mut Transform, Entity), With<Block>>,
+) {
+    let mut row_counter: HashMap<i32, usize> = HashMap::with_capacity(GRID_HEIGHT as usize);
+    for (transform, _) in block_q.iter() {
+        let yaxis = transform.translation.y.round() as i32;
+        *row_counter.entry(yaxis).or_insert(0) += 1;
+    }
 
+    let mut full_rows = Vec::with_capacity(row_counter.len());
+    for (row, counter) in row_counter {
+        if counter >= GRID_WIDTH as usize {
+            full_rows.push(row);
+        }
+    }
+
+    for (mut transform, entity) in block_q.iter_mut() {
+        let yaxis = transform.translation.y.round() as i32;
+        for &row in &full_rows {
+            if yaxis == row {
+                commands.entity(entity).despawn();
+                break;
+            } else if yaxis > row {
+                transform.translation.y -= BLOCK_SIZE.y;
+            }
+        }
+    }
+}
 pub fn rotate(
     button_input: Res<ButtonInput<KeyCode>>,
-    mut active_tetris_q: Query<(&mut Transform, &GlobalTransform), With<ActiveTetris>>,
-    field_q: Query<&Transform, (With<Field>, Without<ActiveTetris>)>,
+    mut tetris_q: Query<&mut Transform, With<ActiveTetris>>,
+    field_q: Query<&GlobalTransform, With<Field>>,
     block_q: Query<&Transform, (With<Block>, Without<ActiveTetris>)>,
     children_q: Query<&Children, With<ActiveTetris>>,
     transform_q: Query<&Transform, Without<ActiveTetris>>,
@@ -383,18 +472,63 @@ pub fn rotate(
         return;
     }
 
-    let (mut transform, global_transform) = active_tetris_q.single_mut();
+    let mut transform = tetris_q.single_mut();
+    let global_transform = *field_q.single() * *transform;
     let rotate_transform = Transform::from_rotation(Quat::from_rotation_z(f32::to_radians(-90.0)));
 
+    let field_transform = field_q.single();
+    let children = children_q.single();
+
     if is_tetris_colliding(
-        *global_transform * rotate_transform,
-        &field_q,
+        &(global_transform * rotate_transform),
+        field_transform,
+        children,
         &block_q,
-        &children_q,
         &transform_q,
     ) {
         return;
     }
 
     transform.rotate_z(f32::to_radians(-90.0));
+}
+pub fn update_ghost(
+    game_state: Res<GameState>,
+    active_tetris_q: Query<
+        (&Transform, &GlobalTransform),
+        (With<ActiveTetris>, Without<GhostTetris>),
+    >,
+    mut ghost_tetris_q: Query<(&mut Transform, &mut InheritedVisibility), With<GhostTetris>>,
+    children_q: Query<&Children, With<ActiveTetris>>,
+    field_q: Query<&GlobalTransform, With<Field>>,
+    block_q: Query<&Transform, (With<Block>, Without<GhostTetris>)>,
+    transform_q: Query<&Transform, Without<GhostTetris>>,
+) {
+    let (tetris_transform, tetris_global) = active_tetris_q.single();
+    let (mut ghost_transform, mut ghost_vis) = ghost_tetris_q.single_mut();
+
+    if matches!(*game_state, GameState::BlockClear) {
+        *ghost_vis = InheritedVisibility::HIDDEN;
+        return;
+    } else {
+        *ghost_vis = InheritedVisibility::VISIBLE;
+    }
+
+    let tetris_children = children_q.single();
+    let field_transform = field_q.single();
+
+    let mut fall_distance = 0.0;
+
+    while !is_tetris_colliding(
+        &(Transform::from_xyz(0.0, fall_distance - BLOCK_SIZE.y, 0.0) * *tetris_global),
+        field_transform,
+        tetris_children,
+        &block_q,
+        &transform_q,
+    ) {
+        fall_distance -= BLOCK_SIZE.y;
+    }
+
+    *ghost_transform = *tetris_transform;
+    ghost_transform.translation.y += fall_distance;
+    ghost_transform.translation.z = -1.0;
 }
