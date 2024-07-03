@@ -171,12 +171,7 @@ pub fn setup(
     let next_field = next_field_q.single();
 
     let next_index = manager.next_tetris();
-    let next_tetris = spawn_tetris(
-        &mut commands,
-        next_index,
-        &sprite_handle,
-        Color::WHITE,
-    );
+    let next_tetris = spawn_tetris(&mut commands, next_index, &sprite_handle, Color::WHITE);
     commands
         .entity(next_tetris)
         .insert(NextTetris)
@@ -429,9 +424,13 @@ pub fn rotate(
     children_q: Query<&Children, With<ActiveTetris>>,
     transform_q: Query<&Transform, Without<ActiveTetris>>,
 ) {
-    if !button_input.just_pressed(KeyCode::ArrowUp) {
+    let clockwise = if button_input.just_pressed(KeyCode::KeyX) {
+        true
+    } else if button_input.just_pressed(KeyCode::KeyZ) {
+        false
+    } else {
         return;
-    }
+    };
 
     let (mut transform, mut active_tetris) = tetris_q.single_mut();
     if active_tetris.index == tetris::O {
@@ -441,9 +440,13 @@ pub fn rotate(
     let children = children_q.single();
 
     let mut rotated_transform = *transform;
-    rotated_transform.rotate_z(-90.0_f32.to_radians());
+    rotated_transform.rotate_z((if clockwise { -90.0_f32 } else { 90.0_f32 }).to_radians());
 
-    let next_rotation_index = (active_tetris.rotation_index + 1) % 4;
+    let next_rotation_index = (if clockwise {
+        active_tetris.rotation_index + 1
+    } else {
+        active_tetris.rotation_index.wrapping_sub(1)
+    }) & 0b11;
 
     let mut can_rotate = false;
 
@@ -457,10 +460,13 @@ pub fn rotate(
         };
 
         let mut test_transform = rotated_transform;
-    
+
         for test in tests {
-            test_transform.translation = (vec2(test[0], test[1]) * BLOCK_SIZE).extend(0.0) + rotated_transform.translation;
-    
+            test_transform.translation = (vec2(test[0], test[1])
+                * if clockwise { BLOCK_SIZE } else { -BLOCK_SIZE })
+            .extend(0.0)
+                + rotated_transform.translation;
+
             if !is_tetris_colliding(&test_transform, children, &block_q, &transform_q) {
                 rotated_transform.translation = test_transform.translation;
                 can_rotate = true;
