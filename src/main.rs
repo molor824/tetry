@@ -3,7 +3,7 @@ mod tetris;
 
 use std::mem;
 
-use bevy::{core::*, prelude::*, render::camera::*, transform::TransformSystem, window::*};
+use bevy::{core::*, prelude::*, render::camera::*, window::*};
 
 const SPRITES_PATH: &str = "sprites.png";
 const VISIBLE_FRAME: u32 = 5;
@@ -146,20 +146,13 @@ fn main() {
                 tetris::rotate.run_if(is_state_play),
                 tetris::slide.run_if(is_state_play),
                 tetris::fall.run_if(is_state_play),
-            )
-                .chain(),
-        )
-        .add_systems(
-            PostUpdate,
-            (
                 tetris::place.run_if(is_state_block_clear),
                 tetris::clear_block.run_if(is_state_block_clear),
                 tetris::advance.run_if(is_state_block_clear),
                 tetris::check_advanced_block.run_if(is_state_block_clear),
                 tetris::update_ghost,
             )
-                .chain()
-                .after(TransformSystem::TransformPropagate),
+                .chain(),
         )
         .run();
 }
