@@ -52,6 +52,7 @@ pub struct TetrisManager {
     pub slide_timer: Timer,
     pub slide_dir: f32,
     pub hit_floor: bool,
+    pub hold: bool,
 }
 impl TetrisManager {
     fn new() -> Self {
@@ -75,6 +76,7 @@ impl TetrisManager {
             slide_timer: Timer::from_seconds(SLIDE_TIME, TimerMode::Repeating),
             slide_dir: 0.0,
             hit_floor: false,
+            hold: false,
         }
     }
     pub fn current_tetris(&self) -> usize {
@@ -98,15 +100,19 @@ impl TetrisManager {
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 enum GameState {
     Play,
-    BlockClear,
+    Place,
+    Advance,
     GameOver,
 }
 
 fn is_state_play(game_state: Res<GameState>) -> bool {
     *game_state == GameState::Play
 }
-fn is_state_block_clear(game_state: Res<GameState>) -> bool {
-    *game_state == GameState::BlockClear
+fn is_state_place(game_state: Res<GameState>) -> bool {
+    *game_state == GameState::Place
+}
+fn is_state_advance(game_state: Res<GameState>) -> bool {
+    *game_state == GameState::Advance
 }
 fn is_state_game_over(game_state: Res<GameState>) -> bool {
     *game_state == GameState::GameOver
@@ -143,13 +149,14 @@ fn main() {
             Update,
             (
                 make_visible,
+                tetris::hold.run_if(is_state_play),
                 tetris::rotate.run_if(is_state_play),
                 tetris::slide.run_if(is_state_play),
                 tetris::fall.run_if(is_state_play),
-                tetris::place.run_if(is_state_block_clear),
-                tetris::clear_block.run_if(is_state_block_clear),
-                tetris::advance.run_if(is_state_block_clear),
-                tetris::check_advanced_block.run_if(is_state_block_clear),
+                tetris::place.run_if(is_state_place),
+                tetris::clear_block.run_if(is_state_place),
+                tetris::advance.run_if(is_state_advance),
+                tetris::check_advanced_block.run_if(is_state_advance),
                 tetris::update_ghost,
             )
                 .chain(),

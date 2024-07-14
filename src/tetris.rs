@@ -45,23 +45,13 @@ pub const BLOCK_POSITIONS: [[[f32; 2]; 4]; 7] = [
     [[-1.0, 0.0], [ 0.0, 0.0], [ 1.0,  0.0], [ 1.0,  1.0]],
 ];
 
-#[rustfmt::skip]
-pub const JLSTZ_WALL_KICK: [[[f32; 2]; 4]; 4] = [
-    [[-1.0, 0.0], [-1.0,  1.0], [0.0, -2.0], [-1.0, -2.0]], // 0 state (spawn state)
-    [[ 1.0, 0.0], [ 1.0, -1.0], [0.0,  2.0], [ 1.0,  2.0]], // R state (clockwise rotation)
-    [[ 1.0, 0.0], [ 1.0,  1.0], [0.0, -2.0], [ 1.0, -2.0]], // 2 state (2 rotations)
-    [[-1.0, 0.0], [-1.0, -1.0], [0.0,  2.0], [-1.0,  2.0]], // L state (counter clockwise rotation)
-];
-#[rustfmt::skip]
-pub const I_WALL_KICK: [[[f32; 2]; 4]; 4] = [
-    [[-2.0, 0.0], [ 1.0, 0.0], [-2.0, -1.0], [ 1.0,  2.0]],
-    [[-1.0, 0.0], [ 2.0, 0.0], [-1.0,  2.0], [ 2.0, -1.0]],
-    [[ 2.0, 0.0], [-1.0, 0.0], [ 2.0,  1.0], [-1.0, -2.0]],
-    [[ 1.0, 0.0], [-2.0, 0.0], [ 1.0, -2.0], [-2.0,  1.0]],
-];
-
 #[derive(Component)]
 pub struct Block;
+
+#[derive(Component)]
+pub struct HoldTetris {
+    pub index: usize,
+}
 
 #[derive(Component)]
 pub struct NextTetris;
@@ -140,6 +130,7 @@ pub fn setup(
     manager: Res<TetrisManager>,
     field_q: Query<Entity, With<Field>>,
     next_field_q: Query<Entity, With<NextField>>,
+    hold_field_q: Query<Entity, With<HoldField>>,
 ) {
     let field = field_q.single();
 
@@ -176,6 +167,14 @@ pub fn setup(
         .entity(next_tetris)
         .insert(NextTetris)
         .set_parent(next_field);
+
+    let hold_field = hold_field_q.single();
+
+    let hold_tetris = spawn_tetris(&mut commands, 0, &sprite_handle, Color::WHITE);
+    commands
+        .entity(hold_tetris)
+        .insert((HoldTetris { index: 0 }, Visibility::Hidden))
+        .set_parent(hold_field);
 }
 
 // check if point is colliding with the tetris blocks and walls
@@ -221,10 +220,13 @@ pub fn is_tetris_colliding(
 
 pub fn place(
     mut commands: Commands,
+    mut manager: ResMut<TetrisManager>,
     active_tetris_q: Query<(&Children, &Transform), With<ActiveTetris>>,
     block_q: Query<(&Sprite, &Handle<Image>, &Transform)>,
     field_q: Query<Entity, With<Field>>,
 ) {
+    manager.hold = false;
+
     let (children, tetris_transform) = active_tetris_q.single();
     let field = field_q.single();
     for child in children {
@@ -292,6 +294,40 @@ pub fn check_advanced_block(
     }
 }
 
+pub fn hold(
+    mut game_state: ResMut<GameState>,
+    mut manager: ResMut<TetrisManager>,
+    button_input: Res<ButtonInput<KeyCode>>,
+    ghost_tetris_q: Query<&Children, With<GhostTetris>>,
+    mut active_tetris_q: Query<(&Children, &mut ActiveTetris, &mut Transform)>,
+    mut hold_tetris_q: Query<(&Children, &mut Visibility, &mut HoldTetris)>,
+    mut block_q: Query<(&mut Transform, &mut Sprite), Without<ActiveTetris>>,
+) {
+    if manager.hold || !button_input.just_pressed(KeyCode::KeyC) {
+        return;
+    }
+
+    let (active_children, mut active_tetris, mut active_transform) = active_tetris_q.single_mut();
+    let ghost_children = ghost_tetris_q.single();
+    let (hold_children, mut hold_vis, mut hold_tetris) = hold_tetris_q.single_mut();
+
+    replace(active_tetris.index, hold_children, &mut block_q);
+
+    if matches!(*hold_vis, Visibility::Visible) {
+        mem::swap(&mut active_tetris.index, &mut hold_tetris.index);
+        replace(active_tetris.index, active_children, &mut block_q);
+        replace(active_tetris.index, ghost_children, &mut block_q);
+        active_transform.rotation = Default::default();
+        active_transform.translation = get_spawn_position(active_tetris.index).extend(active_transform.translation.z);
+    } else {
+        *hold_vis = Visibility::Visible;
+        hold_tetris.index = active_tetris.index;
+        *game_state = GameState::Advance;
+    }
+
+    manager.hold = true;
+}
+
 pub fn fall(
     time: Res<Time>,
     button_input: Res<ButtonInput<KeyCode>>,
@@ -312,7 +348,7 @@ pub fn fall(
             transform.translation.y = fall_transform.translation.y;
             fall_transform.translation.y -= BLOCK_SIZE.y;
         }
-        *game_state = GameState::BlockClear;
+        *game_state = GameState::Place;
         return;
     }
 
@@ -329,7 +365,7 @@ pub fn fall(
             manager.hit_floor = true;
             manager.fall_timer.reset(); // this allows player to slide and place a block
         } else if manager.fall_timer.finished() {
-            *game_state = GameState::BlockClear;
+            *game_state = GameState::Place;
         }
         return;
     }
@@ -389,6 +425,7 @@ pub fn slide(
 
 pub fn clear_block(
     mut commands: Commands,
+    mut game_state: ResMut<GameState>,
     mut block_q: Query<(&mut Transform, Entity), With<Block>>,
 ) {
     let mut row_counter = HashMap::with_capacity(GRID_HEIGHT as usize);
@@ -415,6 +452,8 @@ pub fn clear_block(
             }
         }
     }
+
+    *game_state = GameState::Advance;
 }
 
 pub fn rotate(
@@ -424,13 +463,9 @@ pub fn rotate(
     children_q: Query<&Children, With<ActiveTetris>>,
     transform_q: Query<&Transform, Without<ActiveTetris>>,
 ) {
-    let clockwise = if button_input.just_pressed(KeyCode::KeyX) {
-        true
-    } else if button_input.just_pressed(KeyCode::KeyZ) {
-        false
-    } else {
+    if !button_input.just_pressed(KeyCode::ArrowUp) {
         return;
-    };
+    }
 
     let (mut transform, mut active_tetris) = tetris_q.single_mut();
     if active_tetris.index == tetris::O {
@@ -440,35 +475,20 @@ pub fn rotate(
     let children = children_q.single();
 
     let mut rotated_transform = *transform;
-    rotated_transform.rotate_z((if clockwise { -90.0_f32 } else { 90.0_f32 }).to_radians());
-
-    let next_rotation_index = (if clockwise {
-        active_tetris.rotation_index + 1
-    } else {
-        active_tetris.rotation_index.wrapping_sub(1)
-    }) & 0b11;
+    rotated_transform.rotate_z(-90.0_f32.to_radians());
 
     let mut can_rotate = false;
 
     if !is_tetris_colliding(&rotated_transform, children, &block_q, &transform_q) {
         can_rotate = true;
     } else {
-        let tests = if active_tetris.index == tetris::I {
-            &I_WALL_KICK[next_rotation_index]
-        } else {
-            &JLSTZ_WALL_KICK[next_rotation_index]
-        };
-
+        const TESTS: [f32; 4] = [1.0, -1.0, 2.0, -2.0]; // only x axis tests
         let mut test_transform = rotated_transform;
 
-        for test in tests {
-            test_transform.translation = (vec2(test[0], test[1])
-                * if clockwise { BLOCK_SIZE } else { -BLOCK_SIZE })
-            .extend(0.0)
-                + rotated_transform.translation;
-
+        for test in TESTS {
+            test_transform.translation.x = rotated_transform.translation.x + test * BLOCK_SIZE.x;
             if !is_tetris_colliding(&test_transform, children, &block_q, &transform_q) {
-                rotated_transform.translation = test_transform.translation;
+                rotated_transform.translation.x = test_transform.translation.x;
                 can_rotate = true;
                 break;
             }
@@ -478,7 +498,8 @@ pub fn rotate(
     if can_rotate {
         transform.rotation = rotated_transform.rotation;
         transform.translation = rotated_transform.translation; // because tests will change translation
-        active_tetris.rotation_index = next_rotation_index;
+        active_tetris.rotation_index += 1;
+        active_tetris.rotation_index %= 4;
     }
 }
 
@@ -492,7 +513,7 @@ pub fn update_ghost(
 ) {
     let (mut ghost_transform, mut ghost_vis) = ghost_tetris_q.single_mut();
 
-    if matches!(*game_state, GameState::BlockClear) {
+    if matches!(*game_state, GameState::Advance) {
         *ghost_vis = InheritedVisibility::HIDDEN;
         return;
     } else {

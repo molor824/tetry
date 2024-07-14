@@ -56,4 +56,21 @@ pub fn setup(mut commands: Commands, sprite_handle: Res<SpriteHandle>) {
         },
         NextField,
     ));
+    commands.spawn((
+        SpriteBundle {
+            texture: sprite_handle.0.clone(),
+            sprite: Sprite {
+                rect: Some(HOLD_FIELD_RECT),
+                ..Default::default()
+            },
+            transform: Transform {
+                translation: (FIELD_RECT.size() * vec2(-0.5, 0.5)
+                    + HOLD_FIELD_RECT.size() * vec2(-0.5, -0.5))
+                .extend(0.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        HoldField,
+    ));
 }
