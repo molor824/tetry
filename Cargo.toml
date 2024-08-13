@@ -18,11 +18,7 @@ features = [
 	"bevy_core_pipeline",
 	"bevy_sprite",
 	"bevy_text",
-	"multi-threaded",
 	"png",
 	"x11",
 	"wayland",
 ]
-
-[profile.dev.package."*"]
-opt-level = 3

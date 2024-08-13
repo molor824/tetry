@@ -6,6 +6,7 @@ use std::mem;
 use bevy::{core::*, prelude::*, render::camera::*, window::*};
 
 const SPRITES_PATH: &str = "sprites.png";
+const FONT_PATH: &str = "retro_gaming.ttf";
 const VISIBLE_FRAME: u32 = 5;
 const FALL_TIME: f32 = 0.5;
 const FAST_FALL_TIME: f32 = 1.0 / 15.0;
@@ -30,6 +31,9 @@ fn camera_setup(mut commands: Commands) {
 fn asset_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let sprite_handle = asset_server.load::<Image>(SPRITES_PATH);
     commands.insert_resource(SpriteHandle(sprite_handle));
+
+    let font_handle = asset_server.load::<Font>(FONT_PATH);
+    commands.insert_resource(FontHandle(font_handle));
 }
 fn make_visible(frame: Res<FrameCount>, mut window_q: Query<&mut Window>) {
     if frame.0 == VISIBLE_FRAME {
@@ -41,6 +45,8 @@ fn make_visible(frame: Res<FrameCount>, mut window_q: Query<&mut Window>) {
 
 #[derive(Resource)]
 pub struct SpriteHandle(pub Handle<Image>);
+#[derive(Resource)]
+pub struct FontHandle(pub Handle<Font>);
 #[derive(Resource)]
 pub struct TetrisManager {
     pub order: [usize; 7],
@@ -142,6 +148,7 @@ fn main() {
                 (asset_setup, camera_setup, game_state_setup),
                 field::setup,
                 tetris::setup,
+                field::load_score,
             )
                 .chain(),
         )
@@ -158,6 +165,7 @@ fn main() {
                 tetris::advance.run_if(is_state_advance),
                 tetris::check_advanced_block.run_if(is_state_advance),
                 tetris::update_ghost,
+                field::update_score,
             )
                 .chain(),
         )

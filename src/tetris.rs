@@ -318,7 +318,8 @@ pub fn hold(
         replace(active_tetris.index, active_children, &mut block_q);
         replace(active_tetris.index, ghost_children, &mut block_q);
         active_transform.rotation = Default::default();
-        active_transform.translation = get_spawn_position(active_tetris.index).extend(active_transform.translation.z);
+        active_transform.translation =
+            get_spawn_position(active_tetris.index).extend(active_transform.translation.z);
     } else {
         *hold_vis = Visibility::Visible;
         hold_tetris.index = active_tetris.index;
@@ -427,6 +428,7 @@ pub fn clear_block(
     mut commands: Commands,
     mut game_state: ResMut<GameState>,
     mut block_q: Query<(&mut Transform, Entity), With<Block>>,
+    mut score_q: Query<&mut Score>,
 ) {
     let mut row_counter = HashMap::with_capacity(GRID_HEIGHT as usize);
     for (transform, _) in block_q.iter() {
@@ -438,6 +440,16 @@ pub fn clear_block(
     for (row, counter) in row_counter {
         if counter >= GRID_WIDTH as usize {
             full_rows.push(row);
+        }
+    }
+
+    let mut score = score_q.single_mut();
+    let len = full_rows.len();
+
+    if len > 0 { // To avoid from change detection detecting when score is not changed, check if the length is more than 0
+        score.current_score += (len * len) as u64;
+        if score.current_score > score.best_score {
+            score.best_score = score.current_score;
         }
     }
 
@@ -504,24 +516,21 @@ pub fn rotate(
 }
 
 pub fn update_ghost(
-    game_state: Res<GameState>,
-    active_tetris_q: Query<&Transform, (With<ActiveTetris>, Without<GhostTetris>)>,
-    mut ghost_tetris_q: Query<(&mut Transform, &mut InheritedVisibility), With<GhostTetris>>,
+    active_tetris_q: Query<
+        &Transform,
+        (With<ActiveTetris>, Without<GhostTetris>, Changed<Transform>),
+    >,
+    mut ghost_tetris_q: Query<&mut Transform, With<GhostTetris>>,
     children_q: Query<&Children, With<ActiveTetris>>,
     block_q: Query<&Transform, (With<Block>, Without<GhostTetris>)>,
     transform_q: Query<&Transform, Without<GhostTetris>>,
 ) {
-    let (mut ghost_transform, mut ghost_vis) = ghost_tetris_q.single_mut();
-
-    if matches!(*game_state, GameState::Advance) {
-        *ghost_vis = InheritedVisibility::HIDDEN;
+    let Ok(tetris_transform) = active_tetris_q.get_single() else {
         return;
-    } else {
-        *ghost_vis = InheritedVisibility::VISIBLE;
-    }
+    };
 
+    let mut ghost_transform = ghost_tetris_q.single_mut();
     let tetris_children = children_q.single();
-    let tetris_transform = active_tetris_q.single();
 
     *ghost_transform = *tetris_transform;
 
